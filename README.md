@@ -1,4 +1,7 @@
-# go-update: Build self-updating Go programs [![godoc reference](https://godoc.org/github.com/inconshreveable/go-update?status.png)](https://godoc.org/github.com/inconshreveable/go-update)
+# go-update: Build self-updating Go programs [![godoc reference](https://godoc.org/github.com/dbaumgarten/go-update?status.png)](https://godoc.org/github.com/dbaumgarten/go-update)
+
+
+## This is a fork of https://github.com/inconshreveable/go-update, that was made, because the original author does not seem to react on issues or PRs and I really wanted to have https://github.com/inconshreveable/go-update/issues/35 fixed. Feel free to use.
 
 Package update provides functionality to implement secure, self-updating Go programs (or other single-file targets)
 A program can update itself by replacing its executable file with a new version.
