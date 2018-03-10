@@ -11,8 +11,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-
-	"github.com/inconshreveable/go-update/internal/osext"
 )
 
 var (
@@ -270,12 +268,12 @@ func (o *Options) SetPublicKeyPEM(pembytes []byte) error {
 
 func (o *Options) getPath() (string, error) {
 	if o.TargetPath == "" {
-		exe, err := osext.Executable()
+		exe, err := os.Executable()
 		if err != nil {
 			return "", err
 		}
 
-		exe, err := filepath.EvalSymlinks(exe)
+		exe, err = filepath.EvalSymlinks(exe)
 		if err != nil {
 			return "", err
 		}
