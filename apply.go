@@ -11,13 +11,14 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 var (
 	openFile = os.OpenFile
 )
 
-// Apply performs an update of the current executable (or opts.TargetFile, if set) with the contents of the given io.Reader.
+// Apply performs an update of the current executable (or u.TargetFile, if set) with the contents of the given io.Reader.
 //
 // Apply performs the following actions to ensure a safe cross-platform update:
 //
@@ -43,40 +44,51 @@ var (
 // there is no new executable file and the old executable file could not be be moved to its original location. In this
 // case you should notify the user of the bad news and ask them to recover manually. Applications can determine whether
 // the rollback failed by calling RollbackError, see the documentation on that function for additional detail.
-func Apply(update io.Reader, opts Options) error {
+func (u *Update) Apply(update io.Reader) error {
 	// validate
 	verify := false
 	switch {
-	case opts.Signature != nil && opts.PublicKey != nil:
+	case u.Signature != nil && u.PublicKey != nil:
 		// okay
 		verify = true
-	case opts.Signature != nil:
+	case u.Signature != nil:
 		return errors.New("no public key to verify signature with")
-	case opts.PublicKey != nil:
+	case u.PublicKey != nil:
 		return errors.New("No signature to verify with")
 	}
 
 	// set defaults
-	if opts.Hash == 0 {
-		opts.Hash = crypto.SHA256
+	if u.Hash == 0 {
+		u.Hash = crypto.SHA1
 	}
-	if opts.Verifier == nil {
-		opts.Verifier = NewECDSAVerifier()
+	if u.Verifier == nil {
+		u.Verifier = NewECDSAVerifier()
 	}
-	if opts.TargetMode == 0 {
-		opts.TargetMode = 0755
-	}
-
 	// get target path
 	var err error
-	opts.TargetPath, err = opts.getPath()
+	u.TargetPath, err = u.getPath()
 	if err != nil {
 		return err
 	}
 
+	if u.TargetMode == 0 {
+		// read mode bits from old file
+		fi, err := os.Stat(u.TargetPath)
+		if err != nil {
+			return err
+		}
+		fileMode := fi.Mode()
+
+		// set umask to 0 so that we can set mode bits properly
+		oldMode := syscall.Umask(0000)
+		defer syscall.Umask(oldMode)
+
+		u.TargetMode = fileMode
+	}
+
 	var newBytes []byte
-	if opts.Patcher != nil {
-		if newBytes, err = opts.applyPatch(update); err != nil {
+	if u.Patcher != nil {
+		if newBytes, err = u.applyPatch(update); err != nil {
 			return err
 		}
 	} else {
@@ -87,29 +99,29 @@ func Apply(update io.Reader, opts Options) error {
 	}
 
 	// verify checksum if requested
-	if opts.Checksum != nil {
-		if err = opts.verifyChecksum(newBytes); err != nil {
+	if u.Checksum != nil {
+		if err = u.verifyChecksum(newBytes); err != nil {
 			return err
 		}
 	}
 
 	if verify {
-		if err = opts.verifySignature(newBytes); err != nil {
+		if err = u.verifySignature(newBytes); err != nil {
 			return err
 		}
 	}
 
 	// get the directory the executable exists in
-	updateDir := filepath.Dir(opts.TargetPath)
-	filename := filepath.Base(opts.TargetPath)
+	updateDir := filepath.Dir(u.TargetPath)
+	filename := filepath.Base(u.TargetPath)
 
 	// Copy the contents of newbinary to a new executable file
 	newPath := filepath.Join(updateDir, fmt.Sprintf(".%s.new", filename))
-	fp, err := openFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, opts.TargetMode)
+	fp, err := openFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, u.TargetMode)
 	if err != nil {
 		return err
 	}
-	os.Chmod(newPath, opts.TargetMode)
+	os.Chmod(newPath, u.TargetMode)
 	defer fp.Close()
 
 	_, err = io.Copy(fp, bytes.NewReader(newBytes))
@@ -122,8 +134,8 @@ func Apply(update io.Reader, opts Options) error {
 	fp.Close()
 
 	// this is where we'll move the executable to so that we can swap in the updated replacement
-	oldPath := opts.OldSavePath
-	removeOld := opts.OldSavePath == ""
+	oldPath := u.OldSavePath
+	removeOld := u.OldSavePath == ""
 	if removeOld {
 		oldPath = filepath.Join(updateDir, fmt.Sprintf(".%s.old", filename))
 	}
@@ -134,13 +146,13 @@ func Apply(update io.Reader, opts Options) error {
 	_ = os.Remove(oldPath)
 
 	// move the existing executable to a new file in the same directory
-	err = os.Rename(opts.TargetPath, oldPath)
+	err = os.Rename(u.TargetPath, oldPath)
 	if err != nil {
 		return err
 	}
 
 	// move the new exectuable in to become the new program
-	err = os.Rename(newPath, opts.TargetPath)
+	err = os.Rename(newPath, u.TargetPath)
 
 	if err != nil {
 		// move unsuccessful
@@ -150,7 +162,7 @@ func Apply(update io.Reader, opts Options) error {
 		// binary to take its place. That means there is no file where the current executable binary
 		// used to be!
 		// Try to rollback by restoring the old binary to its original path.
-		rerr := os.Rename(oldPath, opts.TargetPath)
+		rerr := os.Rename(oldPath, u.TargetPath)
 		if rerr != nil {
 			return &rollbackErr{err, rerr}
 		}
@@ -192,7 +204,7 @@ type rollbackErr struct {
 	rollbackErr error // error encountered while rolling back
 }
 
-type Options struct {
+type Update struct {
 	// TargetPath defines the path to the file to update.
 	// The emptry string means 'the executable file of the running program'.
 	TargetPath string
@@ -212,7 +224,7 @@ type Options struct {
 	// Pluggable signature verification algorithm. If nil, ECDSA is used.
 	Verifier Verifier
 
-	// Use this hash function to generate the checksum. If not set, SHA256 is used.
+	// Use this hash function to generate the checksum. If not set, SHA1 is used.
 	Hash crypto.Hash
 
 	// If nil, treat the update as a complete replacement for the contents of the file at TargetPath.
@@ -227,9 +239,9 @@ type Options struct {
 // CheckPermissions determines whether the process has the correct permissions to
 // perform the requested update. If the update can proceed, it returns nil, otherwise
 // it returns the error that would occur if an update were attempted.
-func (o *Options) CheckPermissions() error {
+func (u *Update) CheckPermissions() error {
 	// get the directory the file exists in
-	path, err := o.getPath()
+	path, err := u.getPath()
 	if err != nil {
 		return err
 	}
@@ -239,7 +251,7 @@ func (o *Options) CheckPermissions() error {
 
 	// attempt to open a file in the file's directory
 	newPath := filepath.Join(fileDir, fmt.Sprintf(".%s.new", fileName))
-	fp, err := openFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, o.TargetMode)
+	fp, err := openFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, u.TargetMode)
 	if err != nil {
 		return err
 	}
@@ -252,7 +264,7 @@ func (o *Options) CheckPermissions() error {
 // SetPublicKeyPEM is a convenience method to set the PublicKey property
 // used for checking a completed update's signature by parsing a
 // Public Key formatted as PEM data.
-func (o *Options) SetPublicKeyPEM(pembytes []byte) error {
+func (u *Update) SetPublicKeyPEM(pembytes []byte) error {
 	block, _ := pem.Decode(pembytes)
 	if block == nil {
 		return errors.New("couldn't parse PEM data")
@@ -262,12 +274,12 @@ func (o *Options) SetPublicKeyPEM(pembytes []byte) error {
 	if err != nil {
 		return err
 	}
-	o.PublicKey = pub
+	u.PublicKey = pub
 	return nil
 }
 
-func (o *Options) getPath() (string, error) {
-	if o.TargetPath == "" {
+func (u *Update) getPath() (string, error) {
+	if u.TargetPath == "" {
 		exe, err := os.Executable()
 		if err != nil {
 			return "", err
@@ -280,13 +292,13 @@ func (o *Options) getPath() (string, error) {
 
 		return exe, nil
 	} else {
-		return o.TargetPath, nil
+		return u.TargetPath, nil
 	}
 }
 
-func (o *Options) applyPatch(patch io.Reader) ([]byte, error) {
+func (u *Update) applyPatch(patch io.Reader) ([]byte, error) {
 	// open the file to patch
-	old, err := os.Open(o.TargetPath)
+	old, err := os.Open(u.TargetPath)
 	if err != nil {
 		return nil, err
 	}
@@ -294,31 +306,31 @@ func (o *Options) applyPatch(patch io.Reader) ([]byte, error) {
 
 	// apply the patch
 	var applied bytes.Buffer
-	if err = o.Patcher.Patch(old, &applied, patch); err != nil {
+	if err = u.Patcher.Patch(old, &applied, patch); err != nil {
 		return nil, err
 	}
 
 	return applied.Bytes(), nil
 }
 
-func (o *Options) verifyChecksum(updated []byte) error {
-	checksum, err := checksumFor(o.Hash, updated)
+func (u *Update) verifyChecksum(updated []byte) error {
+	checksum, err := checksumFor(u.Hash, updated)
 	if err != nil {
 		return err
 	}
 
-	if !bytes.Equal(o.Checksum, checksum) {
-		return fmt.Errorf("Updated file has wrong checksum. Expected: %x, got: %x", o.Checksum, checksum)
+	if !bytes.Equal(u.Checksum, checksum) {
+		return fmt.Errorf("Updated file has wrong checksum. Expected: %x, got: %x", u.Checksum, checksum)
 	}
 	return nil
 }
 
-func (o *Options) verifySignature(updated []byte) error {
-	checksum, err := checksumFor(o.Hash, updated)
+func (u *Update) verifySignature(updated []byte) error {
+	checksum, err := checksumFor(u.Hash, updated)
 	if err != nil {
 		return err
 	}
-	return o.Verifier.VerifySignature(checksum, o.Signature, o.Hash, o.PublicKey)
+	return u.Verifier.VerifySignature(checksum, u.Signature, u.Hash, u.PublicKey)
 }
 
 func checksumFor(h crypto.Hash, payload []byte) ([]byte, error) {
