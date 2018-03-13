@@ -3,20 +3,61 @@ package update
 import (
 	"bytes"
 	"crypto"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 var (
 	openFile = os.OpenFile
 )
+
+type rollbackErr struct {
+	error             // original error
+	rollbackErr error // error encountered while rolling back
+}
+
+type Update struct {
+	// TargetPath defines the path to the file to update.
+	// The emptry string means 'the executable file of the running program'.
+	TargetPath string
+
+	// Create TargetPath replacement with this file mode. If zero, defaults to 0755.
+	TargetMode os.FileMode
+
+	// Checksum of the new binary to verify against. If nil, no checksum or signature verification is done.
+	Checksum []byte
+
+	// Public key to use for signature verification. If nil, no signature verification is done.
+	PublicKey crypto.PublicKey
+
+	// Signature to verify the updated file. If nil, no signature verification is done.
+	Signature []byte
+
+	// Pluggable signature verification algorithm. If nil, ECDSA is used.
+	Verifier Verifier
+
+	// Use this hash function to generate the checksum. If not set, SHA1 is used.
+	Hash crypto.Hash
+
+	// If nil, treat the update as a complete replacement for the contents of the file at TargetPath.
+	// If non-nil, treat the update contents as a patch and use this object to apply the patch.
+	Patcher Patcher
+
+	// Store the old executable file at this path after a successful update.
+	// The empty string means the old executable file will be removed after the update.
+	OldSavePath string
+}
 
 // Apply performs an update of the current executable (or u.TargetFile, if set) with the contents of the given io.Reader.
 //
@@ -140,10 +181,15 @@ func (u *Update) Apply(update io.Reader) error {
 		oldPath = filepath.Join(updateDir, fmt.Sprintf(".%s.old", filename))
 	}
 
+	if err := u.sanityCheck(newPath); err != nil {
+		return err
+	}
+
+	//TODO: investigate. something wrong here
 	// delete any existing old exec file - this is necessary on Windows for two reasons:
 	// 1. after a successful update, Windows can't remove the .old file because the process is still running
 	// 2. windows rename operations fail if the destination file already exists
-	_ = os.Remove(oldPath)
+	// _ = os.Remove(oldPath)
 
 	// move the existing executable to a new file in the same directory
 	err = os.Rename(u.TargetPath, oldPath)
@@ -183,6 +229,32 @@ func (u *Update) Apply(update io.Reader) error {
 	return nil
 }
 
+func (u *Update) sanityCheck(newPath string) error {
+	//overseer sanity check, dont replace our good binary with a non-executable file
+	tokenIn := token()
+	cmd := exec.Command(newPath, "validate")
+	cmd.Env = append(os.Environ(), []string{"TEST_TOKEN=" + tokenIn}...)
+	returned := false
+	go func() {
+		time.Sleep(5 * time.Second)
+		if !returned {
+			log.Printf("sanity check against fetched executable timed-out\n")
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+			}
+		}
+	}()
+	tokenOut, err := cmd.CombinedOutput()
+	returned = true
+	if err != nil {
+		return fmt.Errorf("failed to run temp binary: %s (%s) output \"%s\"", err, newPath, tokenOut)
+	}
+	if tokenIn != string(tokenOut) {
+		return fmt.Errorf("sanity check failed")
+	}
+	return nil
+}
+
 // RollbackError takes an error value returned by Apply and returns the error, if any,
 // that occurred when attempting to roll back from a failed update. Applications should
 // always call this function on any non-nil errors returned by Apply.
@@ -197,43 +269,6 @@ func RollbackError(err error) error {
 		return rerr.rollbackErr
 	}
 	return nil
-}
-
-type rollbackErr struct {
-	error             // original error
-	rollbackErr error // error encountered while rolling back
-}
-
-type Update struct {
-	// TargetPath defines the path to the file to update.
-	// The emptry string means 'the executable file of the running program'.
-	TargetPath string
-
-	// Create TargetPath replacement with this file mode. If zero, defaults to 0755.
-	TargetMode os.FileMode
-
-	// Checksum of the new binary to verify against. If nil, no checksum or signature verification is done.
-	Checksum []byte
-
-	// Public key to use for signature verification. If nil, no signature verification is done.
-	PublicKey crypto.PublicKey
-
-	// Signature to verify the updated file. If nil, no signature verification is done.
-	Signature []byte
-
-	// Pluggable signature verification algorithm. If nil, ECDSA is used.
-	Verifier Verifier
-
-	// Use this hash function to generate the checksum. If not set, SHA1 is used.
-	Hash crypto.Hash
-
-	// If nil, treat the update as a complete replacement for the contents of the file at TargetPath.
-	// If non-nil, treat the update contents as a patch and use this object to apply the patch.
-	Patcher Patcher
-
-	// Store the old executable file at this path after a successful update.
-	// The empty string means the old executable file will be removed after the update.
-	OldSavePath string
 }
 
 // CheckPermissions determines whether the process has the correct permissions to
@@ -340,4 +375,10 @@ func checksumFor(h crypto.Hash, payload []byte) ([]byte, error) {
 	hash := h.New()
 	hash.Write(payload) // guaranteed not to error
 	return hash.Sum([]byte{}), nil
+}
+
+func token() string {
+	buff := make([]byte, 8)
+	rand.Read(buff)
+	return fmt.Sprintf("%x", buff)
 }

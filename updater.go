@@ -13,10 +13,6 @@ import (
 	"runtime"
 )
 
-const (
-	plat = runtime.GOOS + "-" + runtime.GOARCH
-)
-
 var defaultHTTPRequester = HTTPRequester{}
 
 // Updater is the configuration and runtime data for doing an update.
@@ -62,7 +58,7 @@ func (u *Updater) Run() (bool, string, error) {
 	}
 
 	u.updater = &Update{
-		OldSavePath: u.getExecRelativeDir(u.Dir),
+		// OldSavePath: u.getExecRelativeDir(u.Dir) + "/",
 	}
 
 	if err := u.updater.CheckPermissions(); err != nil {
@@ -116,6 +112,7 @@ func (u *Updater) update() (bool, error) {
 	if err := u.updater.Apply(bytes.NewBuffer(bin)); err != nil {
 		if errr := RollbackError(err); errr != nil {
 			// update and rollback failed
+			return true, errr
 		}
 		return true, err
 	}
@@ -124,7 +121,7 @@ func (u *Updater) update() (bool, error) {
 }
 
 func (u *Updater) fetchInfo() error {
-	r, err := u.fetch(u.ApiURL + url.QueryEscape(plat) + ".json")
+	r, err := u.fetch(u.ApiURL + url.QueryEscape(u.getPlat()) + ".json")
 	if err != nil {
 		return err
 	}
@@ -138,7 +135,7 @@ func (u *Updater) fetchInfo() error {
 }
 
 func (u *Updater) fetchBin() ([]byte, error) {
-	r, err := u.fetch(u.BinURL + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat) + ".gz")
+	r, err := u.fetch(u.BinURL + url.QueryEscape(u.getPlat()) + "/" + url.QueryEscape(u.Info.Version) + ".gz")
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +166,19 @@ func (u *Updater) fetch(url string) (io.ReadCloser, error) {
 	}
 
 	if readCloser == nil {
-		return nil, fmt.Errorf("Fetch was expected to return non-nil ReadCloser")
+		return nil, fmt.Errorf("fetch was expected to return non-nil ReadCloser")
 	}
 
 	return readCloser, nil
+}
+
+func (u *Updater) getPlat() string {
+	arch := runtime.GOARCH
+	switch arch {
+	case "aarch64":
+		arch = "arm64"
+	case "x86_64":
+		arch = "amd64"
+	}
+	return runtime.GOOS + "_" + arch
 }
