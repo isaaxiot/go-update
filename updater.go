@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 )
 
@@ -173,7 +175,7 @@ func (u *Updater) fetch(url string) (io.ReadCloser, error) {
 }
 
 func (u *Updater) getPlat() string {
-	arch := runtime.GOARCH
+	arch := getArch()
 	switch arch {
 	case "aarch64":
 		arch = "arm64"
@@ -181,4 +183,26 @@ func (u *Updater) getPlat() string {
 		arch = "amd64"
 	}
 	return runtime.GOOS + "_" + arch
+}
+
+func getArch() string {
+	var armPattern = regexp.MustCompile(`^(?i)(armv?[0-9]{1,2})`)
+	var uname unix.Utsname
+	if err := unix.Uname(&uname); err != nil {
+		if runtime.GOARCH == "arm" {
+			return runtime.GOARCH + "v5"
+		}
+	}
+	machine := make([]byte, 0, 65)
+	for _, c := range uname.Machine {
+		if c == 0 {
+			break
+		}
+		machine = append(machine, byte(c))
+	}
+	arch := armPattern.FindString(string(machine))
+	if arch != "" {
+		return arch
+	}
+	return string(machine)
 }
