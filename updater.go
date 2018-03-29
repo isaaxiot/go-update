@@ -182,6 +182,8 @@ func (u *Updater) getPlat() string {
 		arch = "arm64"
 	case "x86_64":
 		arch = "amd64"
+	case "mips":
+		arch = runtime.GOARCH
 	}
 	return runtime.GOOS + "_" + arch
 }
