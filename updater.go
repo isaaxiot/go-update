@@ -137,6 +137,7 @@ func (u *Updater) fetchInfo() error {
 }
 
 func (u *Updater) fetchBin() ([]byte, error) {
+	fmt.Println(u.BinURL + url.QueryEscape(u.getPlat()) + "/" + url.QueryEscape(u.Info.Version) + ".gz")
 	r, err := u.fetch(u.BinURL + url.QueryEscape(u.getPlat()) + "/" + url.QueryEscape(u.Info.Version) + ".gz")
 	if err != nil {
 		return nil, err
