@@ -250,7 +250,7 @@ func (u *Update) sanityCheck(newPath string) error {
 		return fmt.Errorf("failed to run temp binary: %s (%s) output \"%s\"", err, newPath, tokenOut)
 	}
 	if tokenIn != string(tokenOut) {
-		return fmt.Errorf("sanity check failed")
+		return fmt.Errorf("sanity check failed: %s!=%s", tokenIn, string(tokenOut))
 	}
 	return nil
 }
