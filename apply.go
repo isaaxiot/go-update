@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -122,8 +121,8 @@ func (u *Update) Apply(update io.Reader) error {
 		fileMode := fi.Mode()
 
 		// set umask to 0 so that we can set mode bits properly
-		oldMode := syscall.Umask(0000)
-		defer syscall.Umask(oldMode)
+		oldMode := setUmask(0000)
+		defer unsetUmask(oldMode)
 
 		u.TargetMode = fileMode
 	}

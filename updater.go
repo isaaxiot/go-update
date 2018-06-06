@@ -6,12 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 )
 
@@ -182,29 +180,10 @@ func (u *Updater) getPlat() string {
 	case "x86_64":
 		arch = "amd64"
 	case "mips":
+		fallthrough
+	default:
 		arch = runtime.GOARCH
+
 	}
 	return runtime.GOOS + "_" + arch
-}
-
-func getArch() string {
-	var armPattern = regexp.MustCompile(`^(?i)(armv?[0-9]{1,2})`)
-	var uname unix.Utsname
-	if err := unix.Uname(&uname); err != nil {
-		if runtime.GOARCH == "arm" {
-			return runtime.GOARCH + "v5"
-		}
-	}
-	machine := make([]byte, 0, 65)
-	for _, c := range uname.Machine {
-		if c == 0 {
-			break
-		}
-		machine = append(machine, byte(c))
-	}
-	arch := armPattern.FindString(string(machine))
-	if arch != "" {
-		return arch
-	}
-	return string(machine)
 }
